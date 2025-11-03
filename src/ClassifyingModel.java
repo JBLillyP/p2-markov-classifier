@@ -75,7 +75,7 @@ public class ClassifyingModel extends BaseMarkovModel {
         return padded;
     }
 
-    /** Return normalized log likelihood of text given this trained model, with Laplace smoothing. */
+    /** Return total log likelihood of text given this trained model, with Laplace smoothing. */
     public double calculateMatchProbability(String text, double smoother) {
         List<String> padded = createTokenizedText(text);
         if (padded.size() <= myModelSize) {
@@ -94,15 +94,17 @@ public class ClassifyingModel extends BaseMarkovModel {
             double countContextNext = tokenInContextCount(context, nextWord);
             double countContext = (follows == null) ? 0.0 : follows.size();
 
+            // Laplace smoothing
             double prob = (countContextNext + smoother) /
                           (countContext + smoother * myVocab.size());
 
             if (prob <= 0) prob = 1.0 / myVocab.size();
+
             logSum += Math.log(prob);
         }
 
-        // normalize by token count for consistent comparison
-        return logSum / (padded.size() - myModelSize);
+        // ✅ Return total log likelihood, not normalized
+        return logSum;
     }
 
     /** Train model: fill myMap and myVocab */
