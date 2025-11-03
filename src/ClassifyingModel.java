@@ -27,7 +27,7 @@ public class ClassifyingModel extends BaseMarkovModel {
         return String.join("|", context);
     }
 
-    /** Return number of times token follows context in trained model */
+    /** Return number of times token follows context in trained model (with memoization) */
     private int tokenInContextCount(List<String> context, String token) {
         String key = makeKey(context);
 
@@ -75,7 +75,7 @@ public class ClassifyingModel extends BaseMarkovModel {
         return padded;
     }
 
-    /** Return log likelihood of text given this trained model, with Laplace smoothing. */
+    /** Return normalized log likelihood of text given this trained model, with Laplace smoothing. */
     public double calculateMatchProbability(String text, double smoother) {
         List<String> padded = createTokenizedText(text);
         if (padded.size() <= myModelSize) {
@@ -101,7 +101,8 @@ public class ClassifyingModel extends BaseMarkovModel {
             logSum += Math.log(prob);
         }
 
-        return logSum; // no normalization—keep full log probability
+        // normalize by token count for consistent comparison
+        return logSum / (padded.size() - myModelSize);
     }
 
     /** Train model: fill myMap and myVocab */
