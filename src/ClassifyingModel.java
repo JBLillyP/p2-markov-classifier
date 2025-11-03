@@ -52,7 +52,8 @@ public class ClassifyingModel extends BaseMarkovModel {
     @Override
     public List<String> tokenize(String text) {
         List<String> tokens = new ArrayList<>();
-        String includePunc = "[A-Za-z]+|[.,!?;:]";
+        // includes all alphabetic sequences and punctuation marks
+        String includePunc = "\\p{L}+|[.,!?;:]";
         Pattern pattern = Pattern.compile(includePunc);
         Matcher matcher = pattern.matcher(text.toLowerCase());
 
@@ -77,31 +78,39 @@ public class ClassifyingModel extends BaseMarkovModel {
     /** Return log likelihood of text given this trained model, with Laplace smoothing. */
     public double calculateMatchProbability(String text, double smoother) {
         List<String> padded = createTokenizedText(text);
+        if (padded.size() <= myModelSize) {
+            return Double.NEGATIVE_INFINITY;
+        }
+
         double logSum = 0.0;
-        int pairCount = 0;
 
         for (int k = 0; k < padded.size() - myModelSize; k++) {
             List<String> context = padded.subList(k, k + myModelSize);
             String nextWord = padded.get(k + myModelSize);
 
-            List<String> follows = myMap.get(makeKey(context));
+            String key = makeKey(context);
+            List<String> follows = myMap.get(key);
+
             double countContextNext = tokenInContextCount(context, nextWord);
-            double countContext = (follows == null) ? 0 : follows.size();
+            double countContext = (follows == null) ? 0.0 : follows.size();
 
             double prob = (countContextNext + smoother) /
                           (countContext + smoother * myVocab.size());
-            if (prob <= 0) prob = 1.0 / myVocab.size();
 
+            if (prob <= 0) prob = 1.0 / myVocab.size();
             logSum += Math.log(prob);
-            pairCount++;
         }
 
-        return logSum / pairCount;
+        return logSum; // no normalization—keep full log probability
     }
 
     /** Train model: fill myMap and myVocab */
     @Override
     public void processTraining() {
+        // ensure START and END are always counted in vocab
+        myVocab.add("<START>");
+        myVocab.add("<END>");
+
         for (int k = 0; k < myWordSequence.size() - myModelSize; k++) {
             List<String> context = myWordSequence.subList(k, k + myModelSize);
             String next = myWordSequence.get(k + myModelSize);
