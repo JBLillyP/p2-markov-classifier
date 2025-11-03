@@ -53,7 +53,7 @@ public class ClassifyingModel extends BaseMarkovModel {
     public List<String> tokenize(String text) {
         List<String> tokens = new ArrayList<>();
         // includes all alphabetic sequences and punctuation marks
-        String includePunc = "\\p{L}+|[.,!?;:]";
+        String includePunc = "[A-Za-z]+|[.,!?;:]";
         Pattern pattern = Pattern.compile(includePunc);
         Matcher matcher = pattern.matcher(text.toLowerCase());
 
@@ -63,21 +63,16 @@ public class ClassifyingModel extends BaseMarkovModel {
         return tokens;
     }
 
-    /** Tokenize + pad with <START>/<END> tags (returns list, doesn’t modify state) */
-    private List<String> createTokenizedText(String text) {
-        List<String> padded = new ArrayList<>();
-        List<String> tokens = tokenize(text);
-
-        for (int k = 0; k < myModelSize; k++) padded.add("<START>");
-        padded.addAll(tokens);
-        for (int k = 0; k < myModelSize; k++) padded.add(END);
-
-        return padded;
-    }
-
     /** Return total log likelihood of text given this trained model, with Laplace smoothing. */
     public double calculateMatchProbability(String text, double smoother) {
-        List<String> padded = createTokenizedText(text);
+        // Tokenize and pad here (not using helper to avoid truncation/normalization issues)
+        List<String> raw = tokenize(text);
+
+        List<String> padded = new ArrayList<>();
+        for (int i = 0; i < myModelSize; i++) padded.add("<START>");
+        padded.addAll(raw);
+        for (int i = 0; i < myModelSize; i++) padded.add(END);
+
         if (padded.size() <= myModelSize) {
             return Double.NEGATIVE_INFINITY;
         }
@@ -103,7 +98,7 @@ public class ClassifyingModel extends BaseMarkovModel {
             logSum += Math.log(prob);
         }
 
-        // ✅ Return total log likelihood, not normalized
+        // ✅ Return total log likelihood (unnormalized)
         return logSum;
     }
 
@@ -130,6 +125,7 @@ public class ClassifyingModel extends BaseMarkovModel {
         return myVocab.size();
     }
 
+    /** Quick standalone training test */
     public static void main(String[] args) throws IOException {
         ClassifyingModel mm = new ClassifyingModel(3);
         String dirName = "data/shakespeare";
