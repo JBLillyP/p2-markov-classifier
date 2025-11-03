@@ -4,16 +4,18 @@ import java.io.*;
 
 public class ClassifyingModel extends BaseMarkovModel {
 
-    // context -> list of following words
+    // context (N-gram) -> list of tokens that followed in training
     private Map<List<String>, List<String>> myMap;
-    // set of all unique tokens
+
+    // unique tokens seen during training (vocabulary)
     private Set<String> myVocab;
-    // cache for memoization: context -> (token -> count)
+
+    // memo: for a given context, cache counts of each follow token
     private Map<List<String>, Map<String, Integer>> myCache;
 
     public ClassifyingModel(int size) {
         super(size);
-        myMap = new HashMap<>();
+        myMap   = new HashMap<>();
         myVocab = new HashSet<>();
         myCache = new HashMap<>();
     }
@@ -22,96 +24,133 @@ public class ClassifyingModel extends BaseMarkovModel {
         this(2);
     }
 
-    /** Tokenize using required regex */
+    /** Regex tokenization: alphabetic words or punctuation marks. */
     @Override
     public List<String> tokenize(String text) {
         List<String> tokens = new ArrayList<>();
-        Pattern p = Pattern.compile("[A-Za-z]+|[.,!?;:]");
-        Matcher m = p.matcher(text.toLowerCase());
-        while (m.find()) tokens.add(m.group());
+        String includePunc = "[A-Za-z]+|[.,!?;:]";
+        Pattern pattern = Pattern.compile(includePunc);
+        Matcher matcher = pattern.matcher(text.toLowerCase());
+        while (matcher.find()) {
+            tokens.add(matcher.group());
+        }
         return tokens;
     }
 
-    /** Count how many times token follows context, with memoization */
+    /**
+     * Tokenize and pad with <START> and <END> (myModelSize copies on each side).
+     * Returns a NEW list; does not modify instance state.
+     */
+    private List<String> createTokenizedText(String text) {
+        List<String> tokens = tokenize(text);
+        List<String> padded = new ArrayList<>(tokens.size() + 2 * myModelSize);
+        for (int i = 0; i < myModelSize; i++) padded.add("<START>");
+        padded.addAll(tokens);
+        for (int i = 0; i < myModelSize; i++) padded.add(END);
+        return padded;
+    }
+
+    /**
+     * Count how many times 'token' follows 'context' in the trained model.
+     * Uses memoization to avoid rescanning the follows list repeatedly.
+     */
     private int tokenInContextCount(List<String> context, String token) {
-        Map<String,Integer> inner = myCache.get(context);
-        if (inner != null && inner.containsKey(token)) {
-            return inner.get(token);
+        // contexts used as keys must be stable lists
+        List<String> key = List.copyOf(context);
+
+        Map<String, Integer> inner = myCache.get(key);
+        if (inner != null) {
+            Integer cached = inner.get(token);
+            if (cached != null) return cached;
         }
 
+        List<String> follows = myMap.get(key);
         int count = 0;
-        List<String> follows = myMap.get(context);
         if (follows != null) {
             for (String s : follows) {
                 if (s.equals(token)) count++;
             }
         }
 
-        // store result in cache
-        myCache.computeIfAbsent(new ArrayList<>(context), k -> new HashMap<>())
-               .put(token, count);
+        if (inner == null) {
+            inner = new HashMap<>();
+            myCache.put(key, inner);
+        }
+        inner.put(token, count);
         return count;
     }
 
-    /** Train model: build myMap and vocab set */
-    @Override
-    public void processTraining() {
-        myVocab.clear();
-        for (int i = 0; i < myWordSequence.size() - myModelSize; i++) {
-            List<String> context = myWordSequence.subList(i, i + myModelSize);
-            String next = myWordSequence.get(i + myModelSize);
-
-            // record follower
-            myMap.computeIfAbsent(new ArrayList<>(context), k -> new ArrayList<>()).add(next);
-            myVocab.add(next);
-        }
-    }
-
-    /** Return size of vocabulary */
-    public int vocabularySize() {
-        return myVocab.size();
-    }
-
     /**
-     * Return normalized log-likelihood of text given this trained model.
-     * Uses Laplace smoothing (smoother) and normalization by #unique contexts.
+     * Return the CONTEXT-NORMALIZED log-likelihood of 'text' under this model,
+     * with Laplace smoothing: (nextCount + smoother) / (contextCount + smoother * |V|).
+     * Normalize by the number of UNIQUE contexts seen in the unknown text.
      */
     public double calculateMatchProbability(String text, double smoother) {
         List<String> padded = createTokenizedText(text);
         if (padded.size() <= myModelSize) return Double.NEGATIVE_INFINITY;
 
+        int V = Math.max(1, myVocab.size());
         double logSum = 0.0;
-        Set<String> uniqueContexts = new HashSet<>();
 
-        for (int k = 0; k < padded.size() - myModelSize; k++) {
-            List<String> context = padded.subList(k, k + myModelSize);
-            String next = padded.get(k + myModelSize);
+        // track unique contexts from the unknown text
+        Set<List<String>> uniqueContexts = new HashSet<>();
 
-            List<String> key = new ArrayList<>(context);
-            uniqueContexts.add(String.join("|", key));
+        for (int i = 0; i < padded.size() - myModelSize; i++) {
+            // make stable key for maps/sets
+            List<String> context = List.copyOf(padded.subList(i, i + myModelSize));
+            String next = padded.get(i + myModelSize);
 
-            List<String> follows = myMap.get(key);
-            double contextCount = (follows == null) ? 0.0 : follows.size();
-            double nextCount = tokenInContextCount(key, next);
+            uniqueContexts.add(context);
 
-            double prob = (nextCount + smoother) /
-                          (contextCount + smoother * myVocab.size());
-            if (prob <= 0) prob = 1.0 / myVocab.size();
+            List<String> follows = myMap.get(context);
+            int contextCount = (follows == null) ? 0 : follows.size();
+            int nextCount = tokenInContextCount(context, next);
+
+            double prob = (nextCount + smoother) / (contextCount + smoother * V);
+            // prob cannot be zero with smoothing; guard anyway
+            if (prob <= 0) prob = 1.0 / V;
 
             logSum += Math.log(prob);
         }
 
-        if (uniqueContexts.isEmpty()) return Double.NEGATIVE_INFINITY;
-        // normalize by number of unique contexts in unknown text
-        return logSum / uniqueContexts.size();
+        int denom = Math.max(1, uniqueContexts.size());
+        return logSum / denom;
     }
 
-    /** Local test */
+    /**
+     * Build myMap and myVocab from myWordSequence (already prepared by BaseMarkovModel).
+     * Also clears the memo cache so counts reflect this training set.
+     */
+    @Override
+    public void processTraining() {
+        // fresh build for this training run
+        myMap.clear();
+        myVocab.clear();
+        myCache.clear();
+
+        // add tokens to vocab and fill context->follows
+        for (int i = 0; i < myWordSequence.size(); i++) {
+            myVocab.add(myWordSequence.get(i));
+        }
+
+        for (int i = 0; i < myWordSequence.size() - myModelSize; i++) {
+            List<String> context = List.copyOf(myWordSequence.subList(i, i + myModelSize));
+            String next = myWordSequence.get(i + myModelSize);
+
+            myMap.putIfAbsent(context, new ArrayList<>());
+            myMap.get(context).add(next);
+        }
+    }
+
+    /** Number of unique tokens in the trained model. */
+    public int vocabularySize() {
+        return myVocab.size();
+    }
+
+    // (Optional) local test
     public static void main(String[] args) throws IOException {
-        ClassifyingModel cm = new ClassifyingModel(1);
-        String dir = "data/shakespeare";
-        cm.trainDirectory(dir);
-        System.out.printf("trained %s: vocab=%d, tokens=%d%n",
-                dir, cm.vocabularySize(), cm.tokenSize());
+        ClassifyingModel mm = new ClassifyingModel(1);
+        mm.trainDirectory("data/shakespeare");
+        System.out.printf("order %d, vocab=%d, tokens=%d%n", mm.getOrder(), mm.vocabularySize(), mm.tokenSize());
     }
 }
